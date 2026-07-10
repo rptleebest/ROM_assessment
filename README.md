@@ -56,3 +56,10 @@ libxrender1
 Do not use the old package name `libglib2.0-0` on the current Streamlit Cloud image, because it can trigger an unmet dependency error involving `libffi7`.
 
 After pushing these files to GitHub, run **Manage app → Clear cache → Reboot/Redeploy** in Streamlit Cloud.
+
+
+## v4 추가 변경
+
+- Streamlit Cloud에서 MediaPipe 내부 `import cv2`가 실패하는 문제를 줄이기 위해 앱 폴더에 최소 `cv2.py` 호환 stub을 포함했습니다.
+- 이 앱은 OpenCV 기능을 직접 사용하지 않고 PIL 기반으로 화면을 렌더링합니다.
+- `packages.txt`는 빈 파일입니다. Cloud에서 apt 의존성 충돌이 생기면 기존 packages.txt 내용을 모두 삭제하세요.
