@@ -1,0 +1,7 @@
+# Linux shared libraries required by MediaPipe's internal cv2 import on Streamlit Cloud.
+# Streamlit Cloud currently uses Debian trixie, where libglib2.0-0 is replaced by libglib2.0-0t64.
+libgl1
+libglib2.0-0t64
+libsm6
+libxext6
+libxrender1

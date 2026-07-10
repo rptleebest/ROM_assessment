@@ -37,3 +37,22 @@ streamlit run app.py
 TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 TWILIO_AUTH_TOKEN = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
+
+
+## Streamlit Cloud: cv2 ImportError fix
+
+MediaPipe Tasks imports `cv2` internally even though this project does not use OpenCV directly.
+On Streamlit Cloud, `cv2` can fail to load if Linux shared libraries are missing.
+This v3 package therefore includes `packages.txt` with Debian trixie-compatible package names:
+
+```text
+libgl1
+libglib2.0-0t64
+libsm6
+libxext6
+libxrender1
+```
+
+Do not use the old package name `libglib2.0-0` on the current Streamlit Cloud image, because it can trigger an unmet dependency error involving `libffi7`.
+
+After pushing these files to GitHub, run **Manage app → Clear cache → Reboot/Redeploy** in Streamlit Cloud.
