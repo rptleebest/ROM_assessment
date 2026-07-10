@@ -1,7 +1,8 @@
 streamlit
 streamlit-webrtc
+streamlit-autorefresh
 mediapipe==0.10.35
-opencv-python-headless
 numpy
 av
 Pillow
+twilio
