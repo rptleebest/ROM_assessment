@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 import av
-import cv2
 import numpy as np
 import streamlit as st
+from PIL import Image, ImageDraw, ImageFont
 from streamlit_webrtc import webrtc_streamer, VideoProcessorBase, WebRtcMode
 import streamlit.components.v1 as components
 
@@ -34,45 +34,49 @@ MODEL_PATH = APP_DIR / "pose_landmarker_full.task"
 VOICE_JS_PATH = APP_DIR / "voice.js"
 
 
-# -----------------------------------------------------------------------------
-# Drawing helpers
-# -----------------------------------------------------------------------------
+def _font(size: int) -> ImageFont.ImageFont:
+    # DejaVuSans is usually present on Streamlit Cloud/Linux. Fallback is safe.
+    for path in [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except Exception:
+            pass
+    return ImageFont.load_default()
 
-def put_text(img: np.ndarray, text: str, xy: tuple[int, int], scale: float = 0.65, color=(255, 255, 255), bg=(20, 20, 20)) -> None:
+
+def put_text(draw: ImageDraw.ImageDraw, text: str, xy: tuple[int, int], size: int = 18,
+             color=(255, 255, 255), bg=(20, 20, 20, 210)) -> None:
     x, y = xy
-    font = cv2.FONT_HERSHEY_SIMPLEX
-    thickness = 2
-    (tw, th), _ = cv2.getTextSize(text, font, scale, thickness)
-    cv2.rectangle(img, (x - 6, y - th - 8), (x + tw + 6, y + 7), bg, -1)
-    cv2.putText(img, text, (x, y), font, scale, color, thickness, cv2.LINE_AA)
+    font = _font(size)
+    bbox = draw.textbbox((x, y), text, font=font)
+    pad = 5
+    draw.rectangle((bbox[0] - pad, bbox[1] - pad, bbox[2] + pad, bbox[3] + pad), fill=bg)
+    draw.text((x, y), text, fill=color, font=font)
 
 
-def draw_line(img: np.ndarray, p1, p2, color=(0, 180, 255), thickness=3) -> None:
-    cv2.line(img, (int(p1[0]), int(p1[1])), (int(p2[0]), int(p2[1])), color, thickness, cv2.LINE_AA)
+def draw_line(draw: ImageDraw.ImageDraw, p1, p2, color=(255, 180, 0), thickness=4) -> None:
+    draw.line((int(p1[0]), int(p1[1]), int(p2[0]), int(p2[1])), fill=color, width=thickness)
 
 
-def draw_point(img: np.ndarray, p, color=(0, 255, 0), radius=7) -> None:
-    cv2.circle(img, (int(p[0]), int(p[1])), radius, color, -1, cv2.LINE_AA)
+def draw_point(draw: ImageDraw.ImageDraw, p, color=(0, 255, 0), radius=7) -> None:
+    x, y = int(p[0]), int(p[1])
+    draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=color)
 
 
-def draw_reference_guides(img: np.ndarray, measurement, status: Dict[str, Any]) -> None:
-    """Draw green/red guide lines. Green means neutral is stable enough."""
-    h, w = img.shape[:2]
+def draw_reference_guides(draw: ImageDraw.ImageDraw, size: tuple[int, int], measurement, status: Dict[str, Any]) -> None:
+    w, h = size
     ok = bool(status.get("alignment_ok", False))
-    color = (0, 200, 0) if ok else (0, 0, 255)
-    # global center crosshair, useful for arranging patient posture
-    cv2.line(img, (w // 2, 0), (w // 2, h), color, 2, cv2.LINE_AA)
-    cv2.line(img, (0, h // 2), (w, h // 2), color, 2, cv2.LINE_AA)
-    # local reference through the main joint or base point
+    color = (0, 210, 0) if ok else (230, 0, 0)
+    draw.line((w // 2, 0, w // 2, h), fill=color, width=3)
+    draw.line((0, h // 2, w, h // 2), fill=color, width=3)
     if measurement and measurement.points:
         p = measurement.points[0]
-        cv2.line(img, (int(p[0]), 0), (int(p[0]), h), color, 1, cv2.LINE_AA)
-        cv2.line(img, (0, int(p[1])), (w, int(p[1])), color, 1, cv2.LINE_AA)
+        draw.line((int(p[0]), 0, int(p[0]), h), fill=color, width=2)
+        draw.line((0, int(p[1]), w, int(p[1])), fill=color, width=2)
 
-
-# -----------------------------------------------------------------------------
-# WebRTC video processor
-# -----------------------------------------------------------------------------
 
 class ROMVideoProcessor(VideoProcessorBase):
     def __init__(
@@ -122,53 +126,68 @@ class ROMVideoProcessor(VideoProcessorBase):
         }
 
     def recv(self, frame: av.VideoFrame) -> av.VideoFrame:
-        img = frame.to_ndarray(format="bgr24")
-        # Keep processing reasonably light for cloud deployment.
-        img = cv2.resize(img, (640, 480))
+        # Use RGB + Pillow instead of cv2. This avoids OpenCV DLL/libGL import
+        # problems on Streamlit Cloud and on users' computers.
+        img = frame.to_ndarray(format="rgb24")
+        pil = Image.fromarray(img)
+        pil = pil.resize((640, 480), Image.Resampling.BILINEAR)
         if self.mirror_video:
-            img = cv2.flip(img, 1)
-
+            pil = pil.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
+        img = np.asarray(pil).copy()
         h, w = img.shape[:2]
+
         measurement = None
         result_status = None
 
         try:
-            landmarks = self.pose.detect(img)
+            landmarks = self.pose.detect_rgb(img)
             if landmarks:
                 measurement = compute_measurement(self.spec, self.side, landmarks, w, h)
                 result_status = self.analyzer.update(measurement.raw_angle, measurement.valid)
-                if measurement.valid:
-                    for p1, p2 in measurement.lines:
-                        draw_line(img, p1, p2)
-                    for p in measurement.points:
-                        draw_point(img, p)
-                else:
-                    put_text(img, measurement.message, (20, 90), 0.55, color=(255, 255, 255), bg=(0, 0, 180))
             else:
                 result_status = self.analyzer.update(None, False)
-                put_text(img, "No body detected", (20, 90), 0.65, color=(255, 255, 255), bg=(0, 0, 180))
         except Exception as exc:
             result_status = self.analyzer.status
-            put_text(img, f"Processing error: {exc}", (20, 90), 0.52, color=(255, 255, 255), bg=(0, 0, 180))
+            measurement = None
+            error_text = f"Processing error: {str(exc)[:80]}"
+        else:
+            error_text = ""
 
         status_dict = self._status_to_dict(result_status)
-        draw_reference_guides(img, measurement, status_dict)
 
-        # Overlay panel
+        pil = Image.fromarray(img)
+        draw = ImageDraw.Draw(pil, "RGBA")
+
+        if measurement is not None and measurement.valid:
+            for p1, p2 in measurement.lines:
+                draw_line(draw, p1, p2)
+            for p in measurement.points:
+                draw_point(draw, p)
+        elif measurement is not None:
+            put_text(draw, measurement.message, (20, 86), 16, color=(255, 255, 255), bg=(150, 0, 0, 210))
+        elif error_text:
+            put_text(draw, error_text, (20, 86), 15, color=(255, 255, 255), bg=(150, 0, 0, 210))
+        else:
+            put_text(draw, "No body detected", (20, 86), 17, color=(255, 255, 255), bg=(150, 0, 0, 210))
+
+        draw_reference_guides(draw, pil.size, measurement, status_dict)
+
         state = status_dict.get("state", "")
         rep_count = status_dict.get("rep_count", 0)
         target = status_dict.get("target_value", 0.0)
         current_peak = status_dict.get("current_peak", 0.0)
         screen_text = status_dict.get("screen_text", "")
 
-        put_text(img, self.spec.display_name(), (20, 32), 0.50, bg=(0, 80, 120))
-        put_text(img, f"State: {state}   Reps: {rep_count}/{self.analyzer.reps}", (20, 62), 0.55, bg=(40, 40, 40))
-        put_text(img, f"ROM: {target:.1f} deg   Peak: {current_peak:.1f} deg", (20, 420), 0.62, bg=(40, 40, 40))
-        put_text(img, screen_text[:58], (20, 455), 0.50, bg=(40, 40, 40))
+        put_text(draw, self.spec.display_name(), (20, 16), 15, bg=(0, 80, 120, 210))
+        put_text(draw, f"State: {state}   Reps: {rep_count}/{self.analyzer.reps}", (20, 48), 16, bg=(40, 40, 40, 210))
+        put_text(draw, f"ROM: {target:.1f} deg   Peak: {current_peak:.1f} deg", (20, 402), 17, bg=(40, 40, 40, 210))
+        put_text(draw, screen_text[:55], (20, 438), 15, bg=(40, 40, 40, 210))
 
         if status_dict.get("result"):
             res = status_dict["result"]
-            put_text(img, f"Mean ROM: {res['mean_rom']:.1f} deg  SD: {res['sd']:.1f}", (20, 390), 0.62, color=(255, 255, 255), bg=(0, 120, 0))
+            put_text(draw, f"Mean ROM: {res['mean_rom']:.1f} deg  SD: {res['sd']:.1f}", (20, 365), 18, color=(255, 255, 255), bg=(0, 125, 0, 220))
+
+        img = np.asarray(pil).copy()
 
         with self.lock:
             self.latest.update(status_dict)
@@ -176,7 +195,7 @@ class ROMVideoProcessor(VideoProcessorBase):
                 self.latest["raw_angle"] = measurement.raw_angle
                 self.latest["valid"] = measurement.valid
                 self.latest["message"] = measurement.message
-        return av.VideoFrame.from_ndarray(img, format="bgr24")
+        return av.VideoFrame.from_ndarray(img, format="rgb24")
 
     def _status_to_dict(self, s) -> Dict[str, Any]:
         if s is None:
@@ -221,10 +240,6 @@ class ROMVideoProcessor(VideoProcessorBase):
             )
 
 
-# -----------------------------------------------------------------------------
-# Voice helper
-# -----------------------------------------------------------------------------
-
 def speak_in_browser(text: str, enabled: bool = True) -> None:
     if not enabled or not text:
         return
@@ -239,9 +254,21 @@ def speak_in_browser(text: str, enabled: bool = True) -> None:
     components.html(html, height=0, width=0)
 
 
-# -----------------------------------------------------------------------------
-# Streamlit UI
-# -----------------------------------------------------------------------------
+def get_rtc_configuration() -> Dict[str, Any]:
+    # TURN support can be added with Twilio Secrets. Without secrets, use STUN only.
+    default_stun = {"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]}
+    try:
+        sid = st.secrets.get("TWILIO_ACCOUNT_SID", "")
+        token = st.secrets.get("TWILIO_AUTH_TOKEN", "")
+        if not sid or not token:
+            return default_stun
+        from twilio.rest import Client
+        client = Client(sid, token)
+        twilio_token = client.tokens.create()
+        return {"iceServers": twilio_token.ice_servers}
+    except Exception:
+        return default_stun
+
 
 st.set_page_config(page_title="ROM 실시간 관절각 측정", page_icon="🦴", layout="wide")
 
@@ -292,7 +319,6 @@ with st.sidebar:
     if st.button("측정 상태 초기화", use_container_width=True):
         st.session_state["reset_request"] = time.time()
 
-# Update UI periodically while WebRTC is running.
 if st_autorefresh is not None:
     st_autorefresh(interval=700, key="rom_autorefresh")
 
@@ -323,7 +349,7 @@ with col_video:
         video_processor_factory=lambda: ROMVideoProcessor(**factory_kwargs),
         media_stream_constraints={"video": {"width": 640, "height": 480}, "audio": False},
         async_processing=True,
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        rtc_configuration=get_rtc_configuration(),
     )
 
 with col_status:
@@ -331,13 +357,10 @@ with col_status:
     latest: Optional[Dict[str, Any]] = None
     processor = ctx.video_processor if ctx and ctx.video_processor else None
     if processor is not None:
-        # Reset current processor if requested.
         if "reset_request" in st.session_state:
             processor.reset_analyzer()
             del st.session_state["reset_request"]
         latest = processor.get_latest()
-    else:
-        latest = None
 
     if latest is None:
         st.info("위 카메라 영역에서 START를 눌러 측정을 시작하세요. 브라우저가 카메라 권한을 요청하면 허용해야 합니다.")
@@ -367,7 +390,6 @@ with col_status:
             st.markdown("### 기록된 최고값")
             st.write(", ".join(f"{v:.1f}°" for v in peaks))
 
-        # Voice: speak once per new voice_id.
         voice_id = latest.get("voice_id", 0)
         voice_text = latest.get("voice_text", "")
         voice_session_key = f"last_voice_id_{webrtc_key}"
@@ -378,7 +400,7 @@ with col_status:
 
         result = latest.get("result")
         if result:
-            st.success("3회 반복 ROM 분석 완료")
+            st.success("반복 ROM 분석 완료")
             st.metric("평균 ROM", f"{result['mean_rom']:.1f}°")
             st.metric("표준편차", f"{result['sd']:.1f}")
             c1, c2 = st.columns(2)
@@ -391,7 +413,7 @@ with col_status:
 st.markdown("---")
 st.markdown(
     """
-**측정 흐름**: START → 중립자세 유지 → 기준선 2초 안정 → 음성 안내 후 선택한 방향으로 움직임 → 처음 위치로 복귀 → 3회 반복 평균 산출  
+**측정 흐름**: START → 중립자세 유지 → 기준선 안정 → 음성 안내 후 선택한 방향으로 움직임 → 처음 위치로 복귀 → 반복 평균 산출  
 **중요**: 단일 웹캠 기반 2D/준3D landmark 추정 방식이므로 교육·피드백용으로 사용하세요. 임상 진단/치료 결정용으로 사용하려면 별도 타당도 검증이 필요합니다.
 """
 )

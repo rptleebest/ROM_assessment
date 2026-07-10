@@ -1,12 +1,15 @@
-"""MediaPipe PoseLandmarker wrapper for Streamlit/WebRTC."""
+"""MediaPipe PoseLandmarker wrapper for Streamlit/WebRTC.
+
+This version avoids importing OpenCV (`cv2`) so the app can run on
+Streamlit Cloud and on computers without Python/VS Code installation.
+"""
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, List, Optional
+from typing import Any, List
 import time
 import threading
 
-import cv2
 import numpy as np
 import mediapipe as mp
 from mediapipe.tasks import python
@@ -14,11 +17,7 @@ from mediapipe.tasks.python import vision
 
 
 class PoseEstimator:
-    """Small wrapper around MediaPipe Tasks PoseLandmarker.
-
-    The model is loaded from bytes rather than a path. This avoids path-encoding
-    problems on Windows and deployment servers.
-    """
+    """Small wrapper around MediaPipe Tasks PoseLandmarker."""
 
     def __init__(self, model_path: str | Path = "pose_landmarker_full.task", num_poses: int = 1) -> None:
         self.model_path = Path(model_path)
@@ -41,9 +40,11 @@ class PoseEstimator:
         self._landmarker = vision.PoseLandmarker.create_from_options(options)
         self._last_ts = 0
 
-    def detect(self, bgr_frame: np.ndarray) -> List[Any]:
+    def detect_rgb(self, rgb_frame: np.ndarray) -> List[Any]:
         """Return one pose landmark list, or an empty list when no pose is detected."""
-        rgb = cv2.cvtColor(bgr_frame, cv2.COLOR_BGR2RGB)
+        if rgb_frame.dtype != np.uint8:
+            rgb_frame = rgb_frame.astype(np.uint8)
+        rgb = np.ascontiguousarray(rgb_frame)
         image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
         ts = int(time.time() * 1000)
         if ts <= self._last_ts:
