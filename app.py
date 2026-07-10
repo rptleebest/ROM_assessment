@@ -10,7 +10,7 @@ st.set_page_config(
 
 st.title("🦴 실시간 관절가동범위(ROM) 교육용 피드백 앱")
 st.caption(
-    "Browser-only v5 버전: 카메라 영상과 MediaPipe 자세 추정은 서버가 아니라 사용자 브라우저 안에서 처리됩니다. "
+    "Browser-only v6 버전: 카메라 영상과 MediaPipe 자세 추정은 서버가 아니라 사용자 브라우저 안에서 처리됩니다. "
     "교육·피드백용 프로토타입이며 임상 진단용 사용 전에는 별도 검증이 필요합니다."
 )
 
@@ -216,6 +216,10 @@ HTML = r'''
       <input id="moveTh" type="range" min="3" max="30" step="1" value="8" />
       <label for="returnTh">중립 복귀 기준각(°): <span id="returnThVal">3</span></label>
       <input id="returnTh" type="range" min="1" max="12" step="1" value="3" />
+      <label for="endHoldSec">끝범위 정지 시간(초): <span id="endHoldSecVal">1.5</span></label>
+      <input id="endHoldSec" type="range" min="0.8" max="3.0" step="0.1" value="1.5" />
+      <label for="axisTol">고정 기준축 허용범위(%): <span id="axisTolVal">8</span></label>
+      <input id="axisTol" type="range" min="4" max="18" step="1" value="8" />
 
       <hr>
       <div class="section-title">3. 실행</div>
@@ -265,7 +269,7 @@ HTML = r'''
         </div>
       </div>
 
-      <p class="small"><b>측정 흐름:</b> 준비자세 유지 → 기준선 안정 → 선택 방향 끝범위 이동 → 끝범위에서 잠시 멈춤 → 처음 위치로 복귀 → 반복 평균 산출</p>
+      <p class="small"><b>측정 흐름:</b> 준비자세 유지 → 고정 수직/수평 기준축 안정 → 선택 방향 끝범위 이동 → 끝범위에서 1.5초 이상 멈춤 → 처음 위치로 복귀 → 반복 평균 산출</p>
       <p class="small"><b>중요:</b> 단일 웹캠 기반 교육/피드백용 추정입니다. 임상 진단·치료 결정에 사용하려면 별도 검증이 필요합니다.</p>
     </main>
   </div>
@@ -292,6 +296,10 @@ const UI = {
   moveThVal: document.getElementById('moveThVal'),
   returnTh: document.getElementById('returnTh'),
   returnThVal: document.getElementById('returnThVal'),
+  endHoldSec: document.getElementById('endHoldSec'),
+  endHoldSecVal: document.getElementById('endHoldSecVal'),
+  axisTol: document.getElementById('axisTol'),
+  axisTolVal: document.getElementById('axisTolVal'),
   startBtn: document.getElementById('startBtn'),
   voiceBtn: document.getElementById('voiceBtn'),
   measureBtn: document.getElementById('measureBtn'),
@@ -398,6 +406,9 @@ let stableStartSpoken = false;
 let returnCueSpoken = false;
 let movementDetectedSpoken = false;
 let endHoldStart = null;
+let moveStartTime = null;
+let returnStableStart = null;
+let romHistory = [];
 let resultData = null;
 let speechQueue = [];
 let speaking = false;
@@ -522,7 +533,7 @@ function motionInstruction(motion) {
   else if (motion.calc === 'neckRotationProxy') basis = '기준: 코와 양쪽 귀의 상대 위치를 이용합니다. 실제 임상 CROM 회전각이 아니라 참고값입니다.';
   else if (motion.calc === 'trunk') basis = '기준: 어깨 중심과 골반 중심의 수직 정렬을 이용합니다. 흉추/요추를 분리한 값은 아닙니다.';
   else if (motion.calc === 'three') basis = '기준: 선택한 관절을 중심으로 3개 landmark가 이루는 2D 각도 변화를 이용합니다.';
-  const direction = '측정: 기준자세가 안정된 뒤 <b>선택한 방향으로만</b> 움직이고, 끝범위 도달 후 처음 위치로 돌아오면 1회로 기록됩니다. 반대 방향 움직임은 기록하지 않습니다.';
+  const direction = '측정: 기준자세가 고정 수직/수평 축 주변에서 안정된 뒤 <b>선택한 방향으로만</b> 움직입니다. 끝범위에서 잠시 멈춘 뒤 처음 위치로 돌아오면 1회로 기록됩니다. 반대 방향 움직임은 기록하지 않습니다.';
   const note = motion.note ? '주의: ' + motion.note : '';
   return `${planeText}<br>${basis}<br>${direction}${note ? '<br>' + note : ''}`;
 }
@@ -555,6 +566,8 @@ UI.motion.addEventListener('change', () => updateSelectedMotion(true));
 UI.stableSec.addEventListener('input', () => UI.stableSecVal.textContent = Number(UI.stableSec.value).toFixed(1));
 UI.moveTh.addEventListener('input', () => UI.moveThVal.textContent = UI.moveTh.value);
 UI.returnTh.addEventListener('input', () => UI.returnThVal.textContent = UI.returnTh.value);
+UI.endHoldSec.addEventListener('input', () => UI.endHoldSecVal.textContent = Number(UI.endHoldSec.value).toFixed(1));
+UI.axisTol.addEventListener('input', () => UI.axisTolVal.textContent = UI.axisTol.value);
 
 function getPt(lms, idx) {
   const lm = lms[idx];
@@ -640,53 +653,100 @@ function neutralGuideOk(lms, motion) {
   const le = getPt(lms, LM.leftEar), re = getPt(lms, LM.rightEar);
   const shoulderMid = mid(ls, rs);
   const hipMid = mid(lh, rh);
-  const refs = {plane: motion?.plane || 'any'};
+  const tol = Number(UI.axisTol.value) / 100;
+  const center = {x: 0.5, y: 0.5};
+  const refs = {plane: motion?.plane || 'any', axisCenter: center, axisTol: tol};
   if (!motion) return {ok:false, msg:'측정 항목 없음', refs};
 
-  if (motion.plane === 'front') {
-    const headPoint = nose;
-    const baseMid = motion.calc === 'trunk' ? hipMid : shoulderMid;
-    refs.base = baseMid;
-    refs.target = motion.calc === 'trunk' ? shoulderMid : headPoint;
-    refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
-    refs.hipLine = (lh && rh) ? [lh, rh] : null;
-    if (!refs.base || !refs.target) return {ok:false, msg:'정면 기준점이 보이지 않습니다', refs};
-    const centerAlign = Math.abs(refs.target.x - refs.base.x) < (motion.calc === 'trunk' ? 0.075 : 0.08);
-    const shoulderLevel = (!ls || !rs) ? true : Math.abs(ls.y - rs.y) < 0.06;
-    const hipLevel = (!lh || !rh || motion.calc !== 'trunk') ? true : Math.abs(lh.y - rh.y) < 0.06;
-    const ok = centerAlign && shoulderLevel && hipLevel;
-    let msg = '중립 기준선 OK';
-    if (!ok) {
-      msg = motion.calc === 'trunk'
-        ? '어깨 중심을 골반 중심 수직선에 맞추고 어깨/골반을 수평으로 유지하세요'
-        : '코를 어깨 중심 수직선에 맞추고 양쪽 어깨를 수평으로 유지하세요';
-    }
-    return {ok, msg, refs};
-  }
+  function nearVertical(p, mul=1.0) { return !!p && Math.abs(p.x - center.x) <= tol * mul; }
+  function nearHorizontal(p, mul=1.0) { return !!p && Math.abs(p.y - center.y) <= tol * mul; }
+  function nearCross(p, mul=1.0) { return nearVertical(p, mul) && nearHorizontal(p, mul); }
+  function level(a, b, limit=0.06) { return (!a || !b) ? true : Math.abs(a.y - b.y) <= limit; }
 
-  if (motion.plane === 'side') {
-    let base = shoulderMid, target = mid(le, re) || nose;
-    if (motion.calc === 'trunk') { base = hipMid; target = shoulderMid; }
+  // 정면 촬영: 고정 수직선은 코/어깨 중심 또는 어깨/골반 중심 정렬, 고정 수평선은 주 기준 마커 위치를 맞추는 기준입니다.
+  if (motion.plane === 'front') {
+    if (motion.calc === 'neckLateral' || motion.calc === 'neckRotationProxy') {
+      refs.anchor = nose;
+      refs.base = shoulderMid;
+      refs.target = nose;
+      refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
+      if (!nose || !shoulderMid) return {ok:false, msg:'코와 양쪽 어깨가 보이도록 정면으로 맞추세요', refs};
+      const ok = nearCross(nose, 1.15) && nearVertical(shoulderMid, 1.15) && level(ls, rs, 0.055);
+      const msg = ok ? '고정 기준축 OK' : '코를 중앙 십자선에, 어깨 중심을 수직선에 맞추고 양쪽 어깨를 수평으로 유지하세요';
+      return {ok, msg, refs};
+    }
+    if (motion.calc === 'trunk') {
+      refs.anchor = shoulderMid;
+      refs.base = hipMid;
+      refs.target = shoulderMid;
+      refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
+      refs.hipLine = (lh && rh) ? [lh, rh] : null;
+      if (!shoulderMid || !hipMid) return {ok:false, msg:'어깨와 골반이 모두 보이도록 정면으로 맞추세요', refs};
+      const ok = nearCross(shoulderMid, 1.2) && nearVertical(hipMid, 1.2) && level(ls, rs, 0.06) && level(lh, rh, 0.07);
+      const msg = ok ? '고정 기준축 OK' : '어깨 중심을 중앙 십자선에, 골반 중심을 수직선에 맞추고 어깨/골반을 수평으로 유지하세요';
+      return {ok, msg, refs};
+    }
     if (motion.calc === 'three') {
-      // 3점 사지 관절은 선택된 세 landmark가 보이면 시작자세는 허용하되, 기준선은 측정 중심 관절 위주로 표시합니다.
       const ids = motion.parts.map(p => partIdx(motion.side, p));
       const pts = ids.map(id => getPt(lms, id));
       refs.limbPoints = pts;
+      refs.anchor = pts[1] || null;
       refs.base = pts[1] || null;
       refs.target = pts[0] || null;
-      const ok = !pts.some(p => !p);
-      return {ok, msg: ok ? '시작 관절점 OK' : '선택 관절점이 모두 보여야 합니다', refs};
+      const ok = !pts.some(p => !p) && nearCross(pts[1], 1.25);
+      const msg = ok ? '고정 기준축 OK' : '측정 중심 관절을 중앙 십자선 주변에 맞추고 3개 관절점이 모두 보이게 하세요';
+      return {ok, msg, refs};
     }
-    refs.base = base;
-    refs.target = target;
-    refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
-    refs.hipLine = (lh && rh) ? [lh, rh] : null;
-    if (!base || !target) return {ok:false, msg:'측면 기준점이 보이지 않습니다', refs};
-    const align = Math.abs(target.x - base.x) < (motion.calc === 'trunk' ? 0.085 : 0.10);
-    const msg = align ? '중립 기준선 OK' : (motion.calc === 'trunk' ? '어깨 중심이 골반 중심 수직선에 오도록 자세를 조정하세요' : '귀/코가 어깨 중심 수직선에 오도록 자세를 조정하세요');
-    return {ok: align, msg, refs};
   }
 
+  // 측면 촬영: 머리/어깨 또는 몸통 기준점이 화면 중앙 고정축 부근에 있어야 합니다.
+  if (motion.plane === 'side') {
+    if (motion.calc === 'neckFlexExt') {
+      const head = mid(le, re) || nose;
+      refs.anchor = head;
+      refs.base = shoulderMid;
+      refs.target = head;
+      refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
+      if (!head || !shoulderMid) return {ok:false, msg:'귀/코와 어깨가 보이도록 측면을 맞추세요', refs};
+      const ok = nearCross(head, 1.2) && nearVertical(shoulderMid, 1.25);
+      const msg = ok ? '고정 기준축 OK' : '귀/코를 중앙 십자선에, 어깨 중심을 수직선에 맞춰 주세요';
+      return {ok, msg, refs};
+    }
+    if (motion.calc === 'trunk') {
+      refs.anchor = shoulderMid;
+      refs.base = hipMid;
+      refs.target = shoulderMid;
+      refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
+      refs.hipLine = (lh && rh) ? [lh, rh] : null;
+      if (!shoulderMid || !hipMid) return {ok:false, msg:'어깨와 골반이 모두 보이도록 측면을 맞추세요', refs};
+      const ok = nearCross(shoulderMid, 1.2) && nearVertical(hipMid, 1.25);
+      const msg = ok ? '고정 기준축 OK' : '어깨 중심을 중앙 십자선에, 골반 중심을 수직선에 맞춰 주세요';
+      return {ok, msg, refs};
+    }
+    if (motion.calc === 'three') {
+      const ids = motion.parts.map(p => partIdx(motion.side, p));
+      const pts = ids.map(id => getPt(lms, id));
+      refs.limbPoints = pts;
+      refs.anchor = pts[1] || null;
+      refs.base = pts[1] || null;
+      refs.target = pts[0] || null;
+      const ok = !pts.some(p => !p) && nearCross(pts[1], 1.25);
+      const msg = ok ? '고정 기준축 OK' : '측정 중심 관절을 중앙 십자선 주변에 맞추고 3개 관절점이 모두 보이게 하세요';
+      return {ok, msg, refs};
+    }
+  }
+
+  // 그 밖의 항목은 중심 관절을 고정 축 주변에 위치시키는 것을 기준으로 합니다.
+  if (motion.calc === 'three') {
+    const ids = motion.parts.map(p => partIdx(motion.side, p));
+    const pts = ids.map(id => getPt(lms, id));
+    refs.limbPoints = pts;
+    refs.anchor = pts[1] || null;
+    refs.base = pts[1] || null;
+    refs.target = pts[0] || null;
+    const ok = !pts.some(p => !p) && nearCross(pts[1], 1.35);
+    return {ok, msg: ok ? '고정 기준축 OK' : '측정 중심 관절을 중앙 십자선 주변에 맞추고 3개 관절점이 모두 보이게 하세요', refs};
+  }
   return {ok:true, msg:'시작자세 landmark OK', refs};
 }
 
@@ -702,6 +762,9 @@ function resetMeasurement(startImmediately=false) {
   returnCueSpoken = false;
   movementDetectedSpoken = false;
   endHoldStart = null;
+  moveStartTime = null;
+  returnStableStart = null;
+  romHistory = [];
   resultData = null;
   UI.resultsBox.style.display = 'none';
   UI.repVal.textContent = `0/${UI.repCount.value}`;
@@ -748,6 +811,9 @@ function markInvalid(reason) {
   returnCueSpoken = false;
   movementDetectedSpoken = false;
   endHoldStart = null;
+  moveStartTime = null;
+  returnStableStart = null;
+  romHistory = [];
   stableStartSpoken = false;
   state = 'invalid_wait_neutral';
   stableStart = null;
@@ -755,21 +821,33 @@ function markInvalid(reason) {
   setStateLabel('재정렬');
   speak(reason + ' 이번 움직임은 기록하지 않습니다. 준비자세로 돌아와 기준선을 다시 맞춰 주세요.', 'invalid');
 }
+function smoothSignedRom(v) {
+  if (!Number.isFinite(v)) return 0;
+  romHistory.push(v);
+  const maxLen = 5;
+  if (romHistory.length > maxLen) romHistory.shift();
+  return romHistory.reduce((a,b)=>a+b,0) / romHistory.length;
+}
 function updateState(meas) {
   if (measurementPaused || state === 'paused') return;
   const now = performance.now();
   const repTarget = Number(UI.repCount.value);
   const stableMs = Number(UI.stableSec.value) * 1000;
+  const endHoldMs = Number(UI.endHoldSec.value) * 1000;
   const moveTh = Number(UI.moveTh.value);
   const returnTh = Number(UI.returnTh.value);
   UI.repVal.textContent = `${reps.length}/${repTarget}`;
 
   if (!meas.ok) {
     setGuide(meas.reason || 'landmark를 찾을 수 없습니다.', 'warn');
+    moveStartTime = null;
+    returnStableStart = null;
     return;
   }
-  const targetRom = Math.max(0, meas.selectedRom);
-  const oppRom = Math.max(0, meas.oppositeRom);
+
+  const signedSmoothed = smoothSignedRom(meas.selectedRom);
+  const targetRom = Math.max(0, signedSmoothed);
+  const oppRom = Math.max(0, -signedSmoothed);
   UI.romVal.textContent = `${fmt(targetRom)}°`;
   UI.peakVal.textContent = peak > 0 ? `${fmt(peak)}°` : '--°';
 
@@ -777,14 +855,18 @@ function updateState(meas) {
 
   if (state === 'wait_neutral' || state === 'wait_next_neutral' || state === 'invalid_wait_neutral') {
     const guideOk = meas.neutralOk.ok;
+    peak = 0;
+    moveStartTime = null;
+    returnStableStart = null;
+    romHistory = [];
     if (guideOk) {
       if (stableStart === null) {
         stableStart = now;
         stableStartSpoken = false;
       }
       const elapsed = (now - stableStart) / 1000;
-      setGuide(`기준선 안정 중입니다. ${elapsed.toFixed(1)} / ${Number(UI.stableSec.value).toFixed(1)}초. 아직 움직이지 마세요.`, 'good');
-      setStateLabel('중립 안정');
+      setGuide(`고정 기준축 안정 중입니다. ${elapsed.toFixed(1)} / ${Number(UI.stableSec.value).toFixed(1)}초. 아직 움직이지 마세요.`, 'good');
+      setStateLabel('기준축 안정');
       if (!stableStartSpoken && elapsed >= 0.3) {
         stableStartSpoken = true;
         speak('기준선이 맞았습니다. 그대로 유지하세요.', 'stable_start_'+state+'_'+reps.length);
@@ -796,19 +878,22 @@ function updateState(meas) {
         returnCueSpoken = false;
         movementDetectedSpoken = false;
         endHoldStart = null;
+        moveStartTime = null;
+        returnStableStart = null;
+        romHistory = [];
         stableStartSpoken = false;
         state = 'ready_to_move';
         stableStart = null;
         const prefix = reps.length === 0 ? '측정을 시작합니다.' : `${reps.length+1}회 측정을 시작합니다.`;
         setGuide(`${prefix} 선택한 방향으로 끝범위까지 움직인 뒤, 끝범위에서 잠시 멈추세요.`, 'good');
-        setStateLabel('움직임 시작');
+        setStateLabel('움직임 시작 대기');
         speak(`${prefix} 선택한 방향으로 끝범위까지 움직인 뒤, 끝범위에서 잠시 멈추세요.`, 'ready_move_'+reps.length+'_'+Date.now());
       }
     } else {
       stableStart = null;
       stableStartSpoken = false;
-      setGuide((meas.neutralOk.msg || '기준선을 맞춰 주세요.') + ' 아직 움직이지 마세요.', 'warn');
-      setStateLabel('중립 조정');
+      setGuide((meas.neutralOk.msg || '고정 기준축에 맞춰 주세요.') + ' 아직 움직이지 마세요.', 'warn');
+      setStateLabel('기준축 조정');
     }
     return;
   }
@@ -819,13 +904,22 @@ function updateState(meas) {
       return;
     }
     if (targetRom >= moveTh) {
-      state = 'moving';
-      peak = targetRom;
-      returnCueSpoken = false;
-      movementDetectedSpoken = true;
-      endHoldStart = now;
-      setGuide('움직임이 시작되었습니다. 선택한 방향으로 끝범위까지 움직인 뒤, 끝범위에서 잠시 멈추세요.', 'info');
-      setStateLabel('끝범위 이동');
+      if (moveStartTime === null) moveStartTime = now;
+      const moveHeld = now - moveStartTime;
+      setGuide(`선택 방향 움직임을 확인 중입니다. ${Math.min(moveHeld/1000, 0.3).toFixed(1)}초`, 'info');
+      if (moveHeld >= 300) {
+        state = 'moving';
+        peak = targetRom;
+        returnCueSpoken = false;
+        movementDetectedSpoken = true;
+        endHoldStart = now;
+        returnStableStart = null;
+        setGuide('움직임이 시작되었습니다. 선택한 방향으로 끝범위까지 움직인 뒤, 끝범위에서 잠시 멈추세요.', 'info');
+        setStateLabel('끝범위 이동');
+      }
+    } else {
+      moveStartTime = null;
+      setGuide('선택한 방향으로 천천히 움직이세요. 아직 움직임 시작 기준각에 도달하지 않았습니다.', 'info');
     }
     return;
   }
@@ -836,45 +930,50 @@ function updateState(meas) {
       return;
     }
 
-    if (targetRom > peak + 0.2) {
+    if (targetRom > peak + 0.3) {
       peak = targetRom;
       endHoldStart = now;
+      returnStableStart = null;
     }
 
-    setStateLabel(returnCueSpoken ? '복귀 중' : '끝범위 확인');
+    setStateLabel(returnCueSpoken ? '처음 위치 복귀' : '끝범위 정지');
     UI.peakVal.textContent = `${fmt(peak)}°`;
 
-    const holdTolerance = Math.max(2.0, peak * 0.08);
-    const nearPeak = peak >= moveTh && targetRom >= peak - holdTolerance;
+    const holdTolerance = Math.max(2.5, peak * 0.08);
+    const nearPeak = peak >= moveTh && targetRom >= peak - holdTolerance && targetRom >= moveTh;
 
     if (!returnCueSpoken) {
       if (nearPeak) {
         if (endHoldStart === null) endHoldStart = now;
         const held = (now - endHoldStart) / 1000;
-        setGuide(`끝범위에서 잠시 멈추세요. 끝범위 안정 중 ${held.toFixed(1)}초`, 'info');
-        if (now - endHoldStart >= 800) {
+        setGuide(`끝범위에서 그대로 멈추세요. 끝범위 안정 중 ${held.toFixed(1)} / ${Number(UI.endHoldSec.value).toFixed(1)}초`, 'info');
+        if (now - endHoldStart >= endHoldMs) {
           returnCueSpoken = true;
+          returnStableStart = null;
           setGuide('끝범위 움직임이 인식되었습니다. 이제 처음 위치로 천천히 돌아오세요.', 'good');
           speak('끝범위 움직임이 인식되었습니다. 이제 처음 위치로 천천히 돌아오세요.', 'return_cue_'+reps.length);
         }
       } else {
         endHoldStart = null;
-        setGuide('선택한 방향으로 끝범위까지 움직인 뒤, 끝범위에서 잠시 멈추세요.', 'info');
+        setGuide('선택한 방향으로 끝범위까지 더 움직인 뒤, 끝범위에서 멈추세요.', 'info');
       }
     } else {
-      setGuide('처음 위치로 천천히 돌아오세요. 기준선이 다시 맞으면 1회 측정이 기록됩니다.', 'info');
-    }
-
-    if (targetRom <= returnTh && peak >= moveTh) {
-      if (!returnCueSpoken) {
-        markInvalid('끝범위에서 충분히 멈추지 않았습니다.');
-        return;
+      if (targetRom <= returnTh) {
+        if (meas.neutralOk.ok) {
+          if (returnStableStart === null) returnStableStart = now;
+          const heldReturn = (now - returnStableStart) / 1000;
+          setGuide(`처음 위치 복귀를 확인 중입니다. ${heldReturn.toFixed(1)} / 0.6초`, 'good');
+          if (now - returnStableStart >= 600) {
+            completeRep(peak);
+          }
+        } else {
+          returnStableStart = null;
+          setGuide('처음 위치 근처까지 돌아왔지만 고정 기준축이 맞지 않습니다. 기준축에 다시 맞춰 주세요.', 'warn');
+        }
+      } else {
+        returnStableStart = null;
+        setGuide('처음 위치로 천천히 돌아오세요. ROM 값이 중립 복귀 기준각 이하가 되면 기록됩니다.', 'info');
       }
-      if (!meas.neutralOk.ok) {
-        markInvalid('처음 위치로 돌아왔지만 기준선이 맞지 않습니다.');
-        return;
-      }
-      completeRep(peak);
     }
   }
 }
@@ -892,32 +991,51 @@ function drawDot(p, color, r=8) {
 function drawNeutralHelpers(meas, w, h) {
   const ok = meas?.ok ? meas.neutralOk.ok : false;
   const color = ok ? '#22c55e' : '#ef4444';
-  if (!meas?.ok || !meas.neutralOk?.refs) {
-    ctx.strokeStyle = color; ctx.lineWidth = 4;
-    ctx.beginPath(); ctx.moveTo(w/2,0); ctx.lineTo(w/2,h); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(0,h*0.75); ctx.lineTo(w,h*0.75); ctx.stroke();
-    return;
-  }
+  const tolRatio = Number(UI.axisTol.value) / 100;
+  const cx = w * 0.5;
+  const cy = h * 0.5;
+  const tolX = w * tolRatio;
+  const tolY = h * tolRatio;
+
+  // Fixed screen axes and tolerance bands.
+  ctx.save();
+  ctx.fillStyle = ok ? 'rgba(34,197,94,0.10)' : 'rgba(239,68,68,0.10)';
+  ctx.fillRect(cx - tolX, 0, tolX * 2, h);
+  ctx.fillRect(0, cy - tolY, w, tolY * 2);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 4;
+  ctx.setLineDash([14, 9]);
+  ctx.beginPath(); ctx.moveTo(cx,0); ctx.lineTo(cx,h); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,cy); ctx.lineTo(w,cy); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cx - tolX, cy - tolY, tolX * 2, tolY * 2);
+  ctx.restore();
+
+  if (!meas?.ok || !meas.neutralOk?.refs) return;
   const refs = meas.neutralOk.refs;
   const base = refs.base ? px(refs.base,w,h) : null;
   const target = refs.target ? px(refs.target,w,h) : null;
+  const anchor = refs.anchor ? px(refs.anchor,w,h) : target;
+
+  // Target/anchor alignment to fixed axis.
+  if (anchor) {
+    drawPxLine({x:anchor.x, y:anchor.y}, {x:cx, y:anchor.y}, color, 3, [6,6]);
+    drawPxLine({x:anchor.x, y:anchor.y}, {x:anchor.x, y:cy}, color, 3, [6,6]);
+    drawDot(anchor, color, 10);
+  }
   if (base) {
-    drawPxLine({x:base.x,y:0}, {x:base.x,y:h}, color, 4, [12,8]);
     drawDot(base, color, 9);
+    drawPxLine(base, {x:cx, y:base.y}, color, 3, [6,6]);
   }
-  if (target) {
-    drawDot(target, color, 9);
-    if (base) {
-      drawPxLine(base, target, color, 4);
-      drawPxLine({x:target.x,y:target.y}, {x:base.x,y:target.y}, color, 3, [6,6]);
-    }
-  }
+  if (target && base) drawPxLine(base, target, color, 4);
   if (refs.shoulderLine) drawPxLine(px(refs.shoulderLine[0],w,h), px(refs.shoulderLine[1],w,h), color, 5);
   if (refs.hipLine) drawPxLine(px(refs.hipLine[0],w,h), px(refs.hipLine[1],w,h), color, 5);
   if (refs.limbPoints) {
     for (const p of refs.limbPoints) if (p) drawDot(px(p,w,h), color, 7);
   }
 }
+
 function draw(meas) {
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0,0,w,h);
@@ -950,11 +1068,11 @@ function draw(meas) {
   ctx.fillStyle = guideOk ? '#16a34a' : '#dc2626';
   ctx.fillText(meas?.ok ? (meas.neutralOk.msg || '') : '카메라/landmark 대기 중', 30, 84);
   ctx.fillStyle = '#111827';
-  const romText = meas?.ok ? `선택방향 ROM ${fmt(Math.max(0, meas.selectedRom))}°   Peak ${peak ? fmt(peak) : '--'}°   Rep ${reps.length}/${UI.repCount.value}` : 'START 후 준비자세를 맞추세요';
+  const romText = meas?.ok ? `실시간 ROM ${fmt(Math.max(0, meas.selectedRom))}°   Peak ${peak ? fmt(peak) : '--'}°   Rep ${reps.length}/${UI.repCount.value}` : 'START 후 준비자세를 맞추세요';
   ctx.fillText(romText, 30, 120);
   let phaseText = '준비';
   if (state === 'wait_neutral' || state === 'wait_next_neutral' || state === 'invalid_wait_neutral') phaseText = '기준선이 초록색으로 안정될 때까지 아직 움직이지 마세요';
-  else if (state === 'ready_to_move') phaseText = '선택 방향으로 끝범위까지 움직인 뒤 잠시 멈추세요';
+  else if (state === 'ready_to_move') phaseText = '선택 방향으로 끝범위까지 움직인 뒤 끝범위에서 멈추세요';
   else if (state === 'moving') phaseText = returnCueSpoken ? '처음 위치로 천천히 돌아오세요' : '끝범위에서 잠시 멈추세요';
   else if (state === 'complete') phaseText = '측정 완료: 결과를 확인하세요';
   else if (state === 'paused') phaseText = '측정 중단됨';
