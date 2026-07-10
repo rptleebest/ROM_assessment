@@ -10,7 +10,7 @@ st.set_page_config(
 
 st.title("🦴 실시간 관절가동범위(ROM) 교육용 피드백 앱")
 st.caption(
-    "Browser-only 버전: 카메라 영상과 MediaPipe 자세 추정은 서버가 아니라 사용자 브라우저 안에서 처리됩니다. "
+    "Browser-only v5 버전: 카메라 영상과 MediaPipe 자세 추정은 서버가 아니라 사용자 브라우저 안에서 처리됩니다. "
     "교육·피드백용 프로토타입이며 임상 진단용 사용 전에는 별도 검증이 필요합니다."
 )
 
@@ -527,17 +527,31 @@ function motionInstruction(motion) {
   return `${planeText}<br>${basis}<br>${direction}${note ? '<br>' + note : ''}`;
 }
 
+function updateSelectedMotion(resetIfRunning=false) {
+  const cat = UI.category.value;
+  const joint = UI.joint.value;
+  const motions = MOTIONS[cat][joint];
+  const idx = Math.max(0, Math.min(Number(UI.motion.value || 0), motions.length - 1));
+  UI.motion.value = String(idx);
+  selectedMotion = motions[idx];
+  setGuide(selectedMotion.note || '측정 항목을 선택하세요.', selectedMotion.unsupported ? 'warn' : 'info');
+  if (UI.methodGuide) UI.methodGuide.innerHTML = motionInstruction(selectedMotion);
+  if (resetIfRunning && running) {
+    resetMeasurement(UI.autoStart.checked);
+    setGuide('측정 동작이 변경되었습니다. 새 동작의 준비자세를 다시 맞춰 주세요.', 'info');
+  }
+}
+
 function updateMotionOptions() {
   const cat = UI.category.value;
   const joint = UI.joint.value;
   UI.motion.innerHTML = MOTIONS[cat][joint].map((m, i) => `<option value="${i}">${m.label}</option>`).join('');
-  selectedMotion = MOTIONS[cat][joint][Number(UI.motion.value || 0)];
-  setGuide(selectedMotion.note || '측정 항목을 선택하세요.', selectedMotion.unsupported ? 'warn' : 'info');
-  if (UI.methodGuide) UI.methodGuide.innerHTML = motionInstruction(selectedMotion);
+  UI.motion.value = '0';
+  updateSelectedMotion(running);
 }
 UI.category.addEventListener('change', updateJointOptions);
 UI.joint.addEventListener('change', updateMotionOptions);
-UI.motion.addEventListener('change', updateMotionOptions);
+UI.motion.addEventListener('change', () => updateSelectedMotion(true));
 UI.stableSec.addEventListener('input', () => UI.stableSecVal.textContent = Number(UI.stableSec.value).toFixed(1));
 UI.moveTh.addEventListener('input', () => UI.moveThVal.textContent = UI.moveTh.value);
 UI.returnTh.addEventListener('input', () => UI.returnThVal.textContent = UI.returnTh.value);
@@ -1021,7 +1035,7 @@ function restartMeasurement() {
 }
 async function startAll() {
   try {
-    updateMotionOptions();
+    updateSelectedMotion(false);
     if (UI.voiceOn.checked && !voiceUnlocked) unlockVoice('음성 안내가 활성화되었습니다. 측정을 시작합니다.');
     if (selectedMotion?.unsupported) {
       setGuide(selectedMotion.note || '현재 지원하지 않는 항목입니다.', 'warn');
