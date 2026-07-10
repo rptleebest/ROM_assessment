@@ -1,8 +1,1 @@
-streamlit
-streamlit-webrtc
-streamlit-autorefresh
-mediapipe==0.10.35
-numpy
-av
-Pillow
-twilio
+streamlit>=1.38
