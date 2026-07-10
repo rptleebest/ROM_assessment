@@ -93,6 +93,7 @@ HTML = r'''
     .btn-gray { background:#e5e7eb; color:#111827; }
     .btn-red { background:#fee2e2; color:#991b1b; }
     .btn-green { background:#dcfce7; color:#166534; }
+    .btn-amber { background:#fef3c7; color:#92400e; }
     .btn:disabled { opacity: .5; cursor:not-allowed; }
     .video-wrap {
       border: 1px solid var(--line);
@@ -160,6 +161,27 @@ HTML = r'''
       font-size: 12px;
     }
     .download-row { display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+    .main-controls {
+      display:flex; gap:10px; flex-wrap:wrap; margin: 12px 0; max-width: 980px;
+      border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: #f8fafc;
+    }
+    .main-controls .btn { min-width: 135px; flex: 1; }
+    .voice-note {
+      font-size: 13px; color: #92400e; background:#fffbeb; border:1px solid #fde68a;
+      border-radius: 10px; padding: 9px; margin-top: 8px; line-height: 1.45;
+    }
+    .method-box {
+      border: 1px solid #cbd5e1;
+      border-radius: 14px;
+      padding: 12px;
+      margin: 10px 0 14px;
+      max-width: 980px;
+      background: #f8fafc;
+      color: #1f2937;
+      line-height: 1.5;
+      font-size: 14px;
+    }
+    .method-box b { color:#111827; }
     hr { border:0; border-top: 1px solid var(--line); margin:16px 0; }
     @media (max-width: 900px) {
       .app { grid-template-columns: 1fr; }
@@ -199,17 +221,32 @@ HTML = r'''
       <div class="section-title">3. 실행</div>
       <button id="startBtn" class="btn btn-primary" style="width:100%;">카메라/모델 시작</button>
       <div style="height:8px;"></div>
+      <button id="voiceBtn" class="btn btn-amber" style="width:100%;">음성 활성화/테스트</button>
+      <div style="height:8px;"></div>
       <button id="measureBtn" class="btn btn-green" style="width:100%;" disabled>측정 새로 시작</button>
       <div style="height:8px;"></div>
+      <button id="pauseBtn" class="btn btn-amber" style="width:100%;" disabled>측정 중단</button>
+      <div style="height:8px;"></div>
+      <button id="resumeBtn" class="btn btn-green" style="width:100%;" disabled>측정 재개</button>
+      <div style="height:8px;"></div>
       <button id="stopBtn" class="btn btn-red" style="width:100%;" disabled>카메라 정지</button>
+      <div id="voiceStatus" class="voice-note">스마트폰에서 음성이 안 나오면 먼저 ‘음성 활성화/테스트’를 누르세요.</div>
       <p class="small">스마트폰에서는 Chrome, Samsung Internet, Safari 등 일반 브라우저에서 HTTPS 주소로 열어 주세요. 카카오톡 내부 브라우저는 카메라 권한이 불안정할 수 있습니다.</p>
     </aside>
 
     <main class="main">
       <div id="topGuide" class="guide">카메라/모델 시작 버튼을 누른 뒤 카메라 권한을 허용하세요.</div>
+      <div id="methodGuide" class="method-box">측정 항목을 선택하면 촬영 방향, 기준선, 움직임 방향 안내가 표시됩니다.</div>
       <div class="video-wrap">
         <video id="video" playsinline autoplay muted></video>
         <canvas id="canvas" width="960" height="720"></canvas>
+      </div>
+      <div class="main-controls">
+        <button id="mainVoiceBtn" class="btn btn-amber">음성 활성화</button>
+        <button id="mainMeasureBtn" class="btn btn-green" disabled>측정 새로 시작</button>
+        <button id="mainPauseBtn" class="btn btn-amber" disabled>측정 중단</button>
+        <button id="mainResumeBtn" class="btn btn-green" disabled>측정 재개</button>
+        <button id="mainStopBtn" class="btn btn-red" disabled>카메라 정지</button>
       </div>
 
       <div class="status-grid">
@@ -228,7 +265,7 @@ HTML = r'''
         </div>
       </div>
 
-      <p class="small"><b>측정 흐름:</b> 중립자세 유지 → 기준선 안정 → 선택 방향으로 움직임 → 처음 위치로 복귀 → 반복 평균 산출</p>
+      <p class="small"><b>측정 흐름:</b> 준비자세 유지 → 기준선 안정 → 선택 방향 끝범위 이동 → 끝범위에서 잠시 멈춤 → 처음 위치로 복귀 → 반복 평균 산출</p>
       <p class="small"><b>중요:</b> 단일 웹캠 기반 교육/피드백용 추정입니다. 임상 진단·치료 결정에 사용하려면 별도 검증이 필요합니다.</p>
     </main>
   </div>
@@ -256,13 +293,23 @@ const UI = {
   returnTh: document.getElementById('returnTh'),
   returnThVal: document.getElementById('returnThVal'),
   startBtn: document.getElementById('startBtn'),
+  voiceBtn: document.getElementById('voiceBtn'),
   measureBtn: document.getElementById('measureBtn'),
+  pauseBtn: document.getElementById('pauseBtn'),
+  resumeBtn: document.getElementById('resumeBtn'),
   stopBtn: document.getElementById('stopBtn'),
+  mainVoiceBtn: document.getElementById('mainVoiceBtn'),
+  mainMeasureBtn: document.getElementById('mainMeasureBtn'),
+  mainPauseBtn: document.getElementById('mainPauseBtn'),
+  mainResumeBtn: document.getElementById('mainResumeBtn'),
+  mainStopBtn: document.getElementById('mainStopBtn'),
   topGuide: document.getElementById('topGuide'),
+  methodGuide: document.getElementById('methodGuide'),
   stateVal: document.getElementById('stateVal'),
   romVal: document.getElementById('romVal'),
   repVal: document.getElementById('repVal'),
   peakVal: document.getElementById('peakVal'),
+  voiceStatus: document.getElementById('voiceStatus'),
   resultsBox: document.getElementById('resultsBox'),
   resultLines: document.getElementById('resultLines'),
   downloadTxt: document.getElementById('downloadTxt'),
@@ -337,6 +384,7 @@ const MOTIONS = {
 let poseLandmarker = null;
 let stream = null;
 let running = false;
+let measurementPaused = false;
 let lastVideoTime = -1;
 let lastLandmarks = null;
 let selectedMotion = null;
@@ -346,17 +394,70 @@ let stableStart = null;
 let peak = 0;
 let reps = [];
 let invalidSpoken = false;
+let stableStartSpoken = false;
+let returnCueSpoken = false;
+let movementDetectedSpoken = false;
+let endHoldStart = null;
 let resultData = null;
 let speechQueue = [];
 let speaking = false;
+let voiceUnlocked = false;
+let preferredVoice = null;
 let lastSpeakKey = '';
 let lastSpeakTime = 0;
 
+function chooseKoreanVoice() {
+  if (!('speechSynthesis' in window)) return null;
+  const voices = window.speechSynthesis.getVoices ? window.speechSynthesis.getVoices() : [];
+  const ko = voices.find(v => (v.lang || '').toLowerCase().startsWith('ko'));
+  return ko || voices[0] || null;
+}
+function unlockVoice(message='음성 안내가 활성화되었습니다.') {
+  if (!UI.voiceOn.checked) {
+    UI.voiceStatus.textContent = '음성 안내가 꺼져 있습니다. 체크박스를 켜면 음성 안내를 사용할 수 있습니다.';
+    return;
+  }
+  if (!('speechSynthesis' in window)) {
+    UI.voiceStatus.textContent = '이 브라우저는 음성 안내 기능을 지원하지 않습니다.';
+    return;
+  }
+  try {
+    preferredVoice = chooseKoreanVoice();
+    window.speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(message);
+    u.lang = preferredVoice?.lang || 'ko-KR';
+    if (preferredVoice) u.voice = preferredVoice;
+    u.rate = 1.0;
+    u.pitch = 1.0;
+    u.onstart = () => { voiceUnlocked = true; UI.voiceStatus.textContent = '음성 안내가 활성화되었습니다.'; };
+    u.onend = () => { voiceUnlocked = true; speaking = false; setTimeout(processSpeechQueue, 120); };
+    u.onerror = () => { UI.voiceStatus.textContent = '음성 출력이 차단되었습니다. 스마트폰에서는 이 버튼을 한 번 더 누르거나 브라우저 음량/무음모드를 확인하세요.'; speaking = false; };
+    speaking = true;
+    window.speechSynthesis.speak(u);
+    setTimeout(() => {
+      if (window.speechSynthesis.paused) window.speechSynthesis.resume();
+    }, 250);
+  } catch (e) {
+    UI.voiceStatus.textContent = '음성 활성화 실패: ' + e.message;
+  }
+}
+function cancelSpeech() {
+  speechQueue = [];
+  speaking = false;
+  if ('speechSynthesis' in window) {
+    try { window.speechSynthesis.cancel(); } catch(e) {}
+  }
+}
 function speak(text, key='') {
   if (!UI.voiceOn.checked) return;
+  if (!('speechSynthesis' in window)) return;
   const now = performance.now();
   if (key && key === lastSpeakKey && now - lastSpeakTime < 2500) return;
   lastSpeakKey = key; lastSpeakTime = now;
+  if (!voiceUnlocked) {
+    UI.voiceStatus.textContent = '음성 안내를 사용하려면 먼저 음성 활성화/테스트 버튼을 누르세요.';
+    return;
+  }
   speechQueue.push(text);
   processSpeechQueue();
 }
@@ -366,12 +467,26 @@ function processSpeechQueue() {
   speaking = true;
   const text = speechQueue.shift();
   const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'ko-KR';
+  preferredVoice = preferredVoice || chooseKoreanVoice();
+  u.lang = preferredVoice?.lang || 'ko-KR';
+  if (preferredVoice) u.voice = preferredVoice;
   u.rate = 1.0;
   u.pitch = 1.0;
   u.onend = () => { speaking = false; setTimeout(processSpeechQueue, 120); };
-  u.onerror = () => { speaking = false; setTimeout(processSpeechQueue, 120); };
-  window.speechSynthesis.speak(u);
+  u.onerror = () => { speaking = false; UI.voiceStatus.textContent = '일부 음성 안내가 출력되지 않았습니다. 브라우저 음량/무음모드를 확인하세요.'; setTimeout(processSpeechQueue, 120); };
+  try {
+    window.speechSynthesis.speak(u);
+    setTimeout(() => { if (window.speechSynthesis.paused) window.speechSynthesis.resume(); }, 250);
+  } catch (e) {
+    speaking = false;
+    UI.voiceStatus.textContent = '음성 안내 오류: ' + e.message;
+  }
+}
+if ('speechSynthesis' in window) {
+  window.speechSynthesis.onvoiceschanged = () => { preferredVoice = chooseKoreanVoice(); };
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && window.speechSynthesis.paused) window.speechSynthesis.resume();
+  });
 }
 
 function setGuide(text, mode='info') {
@@ -393,12 +508,32 @@ function updateJointOptions() {
   UI.joint.innerHTML = Object.keys(MOTIONS[cat]).map(j => `<option>${j}</option>`).join('');
   updateMotionOptions();
 }
+
+function motionInstruction(motion) {
+  if (!motion) return '측정 항목을 선택하세요.';
+  if (motion.unsupported) return '<b>현재 미지원:</b> ' + (motion.note || '이 항목은 현재 버전에서 지원하지 않습니다.');
+  let planeText = '촬영 방향: ';
+  if (motion.plane === 'front') planeText += '<b>정면 촬영</b> - 얼굴/몸통이 카메라를 정면으로 향해야 합니다.';
+  else if (motion.plane === 'side') planeText += '<b>측면 촬영</b> - 측정하려는 움직임이 화면 평면 안에서 보이도록 옆면을 카메라로 향합니다.';
+  else planeText += '<b>관절점이 모두 보이는 방향</b> - 3개 관절점이 가려지지 않아야 합니다.';
+  let basis = '';
+  if (motion.calc === 'neckLateral') basis = '기준: 코가 양쪽 어깨 중심선 위에 있고, 양쪽 어깨가 수평이면 중립으로 봅니다.';
+  else if (motion.calc === 'neckFlexExt') basis = '기준: 귀/코가 어깨 중심 수직선에 가까우면 중립으로 봅니다.';
+  else if (motion.calc === 'neckRotationProxy') basis = '기준: 코와 양쪽 귀의 상대 위치를 이용합니다. 실제 임상 CROM 회전각이 아니라 참고값입니다.';
+  else if (motion.calc === 'trunk') basis = '기준: 어깨 중심과 골반 중심의 수직 정렬을 이용합니다. 흉추/요추를 분리한 값은 아닙니다.';
+  else if (motion.calc === 'three') basis = '기준: 선택한 관절을 중심으로 3개 landmark가 이루는 2D 각도 변화를 이용합니다.';
+  const direction = '측정: 기준자세가 안정된 뒤 <b>선택한 방향으로만</b> 움직이고, 끝범위 도달 후 처음 위치로 돌아오면 1회로 기록됩니다. 반대 방향 움직임은 기록하지 않습니다.';
+  const note = motion.note ? '주의: ' + motion.note : '';
+  return `${planeText}<br>${basis}<br>${direction}${note ? '<br>' + note : ''}`;
+}
+
 function updateMotionOptions() {
   const cat = UI.category.value;
   const joint = UI.joint.value;
   UI.motion.innerHTML = MOTIONS[cat][joint].map((m, i) => `<option value="${i}">${m.label}</option>`).join('');
   selectedMotion = MOTIONS[cat][joint][Number(UI.motion.value || 0)];
   setGuide(selectedMotion.note || '측정 항목을 선택하세요.', selectedMotion.unsupported ? 'warn' : 'info');
+  if (UI.methodGuide) UI.methodGuide.innerHTML = motionInstruction(selectedMotion);
 }
 UI.category.addEventListener('change', updateJointOptions);
 UI.joint.addEventListener('change', updateMotionOptions);
@@ -491,29 +626,68 @@ function neutralGuideOk(lms, motion) {
   const le = getPt(lms, LM.leftEar), re = getPt(lms, LM.rightEar);
   const shoulderMid = mid(ls, rs);
   const hipMid = mid(lh, rh);
-  if (!motion) return {ok:false, msg:'측정 항목 없음'};
+  const refs = {plane: motion?.plane || 'any'};
+  if (!motion) return {ok:false, msg:'측정 항목 없음', refs};
+
   if (motion.plane === 'front') {
-    if (!nose || !shoulderMid || !ls || !rs) return {ok:false, msg:'코와 양쪽 어깨가 보여야 합니다'};
-    const noseAlign = Math.abs(nose.x - shoulderMid.x) < 0.08;
-    const shoulderLevel = Math.abs(ls.y - rs.y) < 0.06;
-    return {ok: noseAlign && shoulderLevel, msg: noseAlign && shoulderLevel ? '중립 기준선 OK' : '코를 어깨 중심에 맞추고 양쪽 어깨를 수평으로 유지하세요'};
+    const headPoint = nose;
+    const baseMid = motion.calc === 'trunk' ? hipMid : shoulderMid;
+    refs.base = baseMid;
+    refs.target = motion.calc === 'trunk' ? shoulderMid : headPoint;
+    refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
+    refs.hipLine = (lh && rh) ? [lh, rh] : null;
+    if (!refs.base || !refs.target) return {ok:false, msg:'정면 기준점이 보이지 않습니다', refs};
+    const centerAlign = Math.abs(refs.target.x - refs.base.x) < (motion.calc === 'trunk' ? 0.075 : 0.08);
+    const shoulderLevel = (!ls || !rs) ? true : Math.abs(ls.y - rs.y) < 0.06;
+    const hipLevel = (!lh || !rh || motion.calc !== 'trunk') ? true : Math.abs(lh.y - rh.y) < 0.06;
+    const ok = centerAlign && shoulderLevel && hipLevel;
+    let msg = '중립 기준선 OK';
+    if (!ok) {
+      msg = motion.calc === 'trunk'
+        ? '어깨 중심을 골반 중심 수직선에 맞추고 어깨/골반을 수평으로 유지하세요'
+        : '코를 어깨 중심 수직선에 맞추고 양쪽 어깨를 수평으로 유지하세요';
+    }
+    return {ok, msg, refs};
   }
+
   if (motion.plane === 'side') {
-    const headPt = mid(le,re) || nose;
-    if (!headPt || !shoulderMid) return {ok:false, msg:'귀/코와 어깨가 보여야 합니다'};
-    const headAlign = Math.abs(headPt.x - shoulderMid.x) < 0.10;
-    return {ok: headAlign, msg: headAlign ? '중립 기준선 OK' : '귀/코가 어깨 중심선에 오도록 자세를 조정하세요'};
+    let base = shoulderMid, target = mid(le, re) || nose;
+    if (motion.calc === 'trunk') { base = hipMid; target = shoulderMid; }
+    if (motion.calc === 'three') {
+      // 3점 사지 관절은 선택된 세 landmark가 보이면 시작자세는 허용하되, 기준선은 측정 중심 관절 위주로 표시합니다.
+      const ids = motion.parts.map(p => partIdx(motion.side, p));
+      const pts = ids.map(id => getPt(lms, id));
+      refs.limbPoints = pts;
+      refs.base = pts[1] || null;
+      refs.target = pts[0] || null;
+      const ok = !pts.some(p => !p);
+      return {ok, msg: ok ? '시작 관절점 OK' : '선택 관절점이 모두 보여야 합니다', refs};
+    }
+    refs.base = base;
+    refs.target = target;
+    refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
+    refs.hipLine = (lh && rh) ? [lh, rh] : null;
+    if (!base || !target) return {ok:false, msg:'측면 기준점이 보이지 않습니다', refs};
+    const align = Math.abs(target.x - base.x) < (motion.calc === 'trunk' ? 0.085 : 0.10);
+    const msg = align ? '중립 기준선 OK' : (motion.calc === 'trunk' ? '어깨 중심이 골반 중심 수직선에 오도록 자세를 조정하세요' : '귀/코가 어깨 중심 수직선에 오도록 자세를 조정하세요');
+    return {ok: align, msg, refs};
   }
-  // any/limb: landmarks visible is enough for neutral guide
-  return {ok:true, msg:'시작자세 landmark OK'};
+
+  return {ok:true, msg:'시작자세 landmark OK', refs};
 }
 
 function resetMeasurement(startImmediately=false) {
+  measurementPaused = false;
+  cancelSpeech();
   neutralValue = null;
   stableStart = null;
   peak = 0;
   reps = [];
   invalidSpoken = false;
+  stableStartSpoken = false;
+  returnCueSpoken = false;
+  movementDetectedSpoken = false;
+  endHoldStart = null;
   resultData = null;
   UI.resultsBox.style.display = 'none';
   UI.repVal.textContent = `0/${UI.repCount.value}`;
@@ -521,9 +695,10 @@ function resetMeasurement(startImmediately=false) {
   UI.romVal.textContent = '--°';
   state = startImmediately ? 'wait_neutral' : 'ready_idle';
   setStateLabel(startImmediately ? '중립 대기' : '준비');
+  updateButtons();
   if (startImmediately) {
-    speak('측정을 시작합니다. 중립 자세를 취해 주세요. 기준선이 안정되면 측정을 시작합니다.', 'measure_start');
-    setGuide('중립자세를 취하고 기준선이 초록색으로 안정될 때까지 유지하세요.', 'info');
+    speak('준비자세를 취하세요. 기준선이 초록색으로 안정될 때까지 아직 움직이지 마세요.', 'measure_start');
+    setGuide('준비자세를 취하세요. 기준선이 초록색으로 안정될 때까지 아직 움직이지 마세요.', 'info');
   }
 }
 function completeRep(value) {
@@ -551,18 +726,23 @@ function completeRep(value) {
     stableStart = null;
     setGuide(`${reps.length}회 측정이 끝났습니다. 다시 중립자세를 맞춰 주세요.`, 'good');
     setStateLabel('다음 중립');
-    speak(`정상적으로 측정되었습니다. ${reps.length}회 측정이 끝났습니다. ${reps.length+1}회 측정을 위해 중립자세를 맞춰 주세요.`, 'rep_done_'+reps.length);
+    speak(`정상적으로 측정되었습니다. ${reps.length}회 측정이 끝났습니다. ${reps.length+1}회 측정을 위해 준비자세로 돌아와 기준선을 다시 맞춰 주세요.`, 'rep_done_'+reps.length);
   }
 }
 function markInvalid(reason) {
   peak = 0;
+  returnCueSpoken = false;
+  movementDetectedSpoken = false;
+  endHoldStart = null;
+  stableStartSpoken = false;
   state = 'invalid_wait_neutral';
   stableStart = null;
-  setGuide(reason + ' 이번 움직임은 기록하지 않습니다. 기준선을 다시 맞춰 주세요.', 'bad');
+  setGuide(reason + ' 이번 움직임은 기록하지 않습니다. 준비자세로 돌아와 기준선을 다시 맞춰 주세요. 신호가 나올 때까지 움직이지 마세요.', 'bad');
   setStateLabel('재정렬');
-  speak(reason + ' 이번 움직임은 기록하지 않습니다. 기준선을 다시 맞춰 주세요.', 'invalid');
+  speak(reason + ' 이번 움직임은 기록하지 않습니다. 준비자세로 돌아와 기준선을 다시 맞춰 주세요.', 'invalid');
 }
 function updateState(meas) {
+  if (measurementPaused || state === 'paused') return;
   const now = performance.now();
   const repTarget = Number(UI.repCount.value);
   const stableMs = Number(UI.stableSec.value) * 1000;
@@ -586,25 +766,34 @@ function updateState(meas) {
     if (guideOk) {
       if (stableStart === null) {
         stableStart = now;
-        speak('기준선이 안정되고 있습니다. 그대로 유지하세요.', 'stable_start');
+        stableStartSpoken = false;
       }
       const elapsed = (now - stableStart) / 1000;
-      setGuide(`기준선 안정 중입니다. ${elapsed.toFixed(1)} / ${Number(UI.stableSec.value).toFixed(1)}초`, 'good');
+      setGuide(`기준선 안정 중입니다. ${elapsed.toFixed(1)} / ${Number(UI.stableSec.value).toFixed(1)}초. 아직 움직이지 마세요.`, 'good');
       setStateLabel('중립 안정');
+      if (!stableStartSpoken && elapsed >= 0.3) {
+        stableStartSpoken = true;
+        speak('기준선이 맞았습니다. 그대로 유지하세요.', 'stable_start_'+state+'_'+reps.length);
+      }
       if (now - stableStart >= stableMs) {
         neutralValue = meas.raw;
         peak = 0;
         invalidSpoken = false;
+        returnCueSpoken = false;
+        movementDetectedSpoken = false;
+        endHoldStart = null;
+        stableStartSpoken = false;
         state = 'ready_to_move';
         stableStart = null;
-        const prefix = reps.length === 0 ? '이제 측정을 시작합니다.' : '기준선이 안정되었습니다.';
-        setGuide(`${prefix} 선택한 방향으로 관절을 움직인 뒤 처음 위치로 돌아오세요.`, 'good');
+        const prefix = reps.length === 0 ? '측정을 시작합니다.' : `${reps.length+1}회 측정을 시작합니다.`;
+        setGuide(`${prefix} 선택한 방향으로 끝범위까지 움직인 뒤, 끝범위에서 잠시 멈추세요.`, 'good');
         setStateLabel('움직임 시작');
-        speak(`${prefix} 관절을 움직이세요. 끝 범위까지 움직인 후 처음 위치로 돌아오세요.`, 'ready_move_'+reps.length);
+        speak(`${prefix} 선택한 방향으로 끝범위까지 움직인 뒤, 끝범위에서 잠시 멈추세요.`, 'ready_move_'+reps.length+'_'+Date.now());
       }
     } else {
       stableStart = null;
-      setGuide(meas.neutralOk.msg || '기준선을 맞춰 주세요.', 'warn');
+      stableStartSpoken = false;
+      setGuide((meas.neutralOk.msg || '기준선을 맞춰 주세요.') + ' 아직 움직이지 마세요.', 'warn');
       setStateLabel('중립 조정');
     }
     return;
@@ -618,8 +807,11 @@ function updateState(meas) {
     if (targetRom >= moveTh) {
       state = 'moving';
       peak = targetRom;
-      setGuide('측정 중입니다. 끝 범위까지 움직인 후 처음 위치로 돌아오세요.', 'info');
-      setStateLabel('측정 중');
+      returnCueSpoken = false;
+      movementDetectedSpoken = true;
+      endHoldStart = now;
+      setGuide('움직임이 시작되었습니다. 선택한 방향으로 끝범위까지 움직인 뒤, 끝범위에서 잠시 멈추세요.', 'info');
+      setStateLabel('끝범위 이동');
     }
     return;
   }
@@ -629,12 +821,43 @@ function updateState(meas) {
       markInvalid('선택한 방향과 반대 방향으로 움직였습니다.');
       return;
     }
-    peak = Math.max(peak, targetRom);
-    setStateLabel('측정 중');
+
+    if (targetRom > peak + 0.2) {
+      peak = targetRom;
+      endHoldStart = now;
+    }
+
+    setStateLabel(returnCueSpoken ? '복귀 중' : '끝범위 확인');
     UI.peakVal.textContent = `${fmt(peak)}°`;
+
+    const holdTolerance = Math.max(2.0, peak * 0.08);
+    const nearPeak = peak >= moveTh && targetRom >= peak - holdTolerance;
+
+    if (!returnCueSpoken) {
+      if (nearPeak) {
+        if (endHoldStart === null) endHoldStart = now;
+        const held = (now - endHoldStart) / 1000;
+        setGuide(`끝범위에서 잠시 멈추세요. 끝범위 안정 중 ${held.toFixed(1)}초`, 'info');
+        if (now - endHoldStart >= 800) {
+          returnCueSpoken = true;
+          setGuide('끝범위 움직임이 인식되었습니다. 이제 처음 위치로 천천히 돌아오세요.', 'good');
+          speak('끝범위 움직임이 인식되었습니다. 이제 처음 위치로 천천히 돌아오세요.', 'return_cue_'+reps.length);
+        }
+      } else {
+        endHoldStart = null;
+        setGuide('선택한 방향으로 끝범위까지 움직인 뒤, 끝범위에서 잠시 멈추세요.', 'info');
+      }
+    } else {
+      setGuide('처음 위치로 천천히 돌아오세요. 기준선이 다시 맞으면 1회 측정이 기록됩니다.', 'info');
+    }
+
     if (targetRom <= returnTh && peak >= moveTh) {
+      if (!returnCueSpoken) {
+        markInvalid('끝범위에서 충분히 멈추지 않았습니다.');
+        return;
+      }
       if (!meas.neutralOk.ok) {
-        markInvalid('복귀 자세의 기준선이 맞지 않습니다.');
+        markInvalid('처음 위치로 돌아왔지만 기준선이 맞지 않습니다.');
         return;
       }
       completeRep(peak);
@@ -642,6 +865,45 @@ function updateState(meas) {
   }
 }
 
+function px(p, w, h) { return {x:p.x*w, y:p.y*h}; }
+function drawPxLine(a, b, color, width=4, dash=[]) {
+  if (!a || !b) return;
+  ctx.save(); ctx.setLineDash(dash); ctx.strokeStyle=color; ctx.lineWidth=width;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); ctx.restore();
+}
+function drawDot(p, color, r=8) {
+  if (!p) return;
+  ctx.fillStyle=color; ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI*2); ctx.fill();
+}
+function drawNeutralHelpers(meas, w, h) {
+  const ok = meas?.ok ? meas.neutralOk.ok : false;
+  const color = ok ? '#22c55e' : '#ef4444';
+  if (!meas?.ok || !meas.neutralOk?.refs) {
+    ctx.strokeStyle = color; ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(w/2,0); ctx.lineTo(w/2,h); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0,h*0.75); ctx.lineTo(w,h*0.75); ctx.stroke();
+    return;
+  }
+  const refs = meas.neutralOk.refs;
+  const base = refs.base ? px(refs.base,w,h) : null;
+  const target = refs.target ? px(refs.target,w,h) : null;
+  if (base) {
+    drawPxLine({x:base.x,y:0}, {x:base.x,y:h}, color, 4, [12,8]);
+    drawDot(base, color, 9);
+  }
+  if (target) {
+    drawDot(target, color, 9);
+    if (base) {
+      drawPxLine(base, target, color, 4);
+      drawPxLine({x:target.x,y:target.y}, {x:base.x,y:target.y}, color, 3, [6,6]);
+    }
+  }
+  if (refs.shoulderLine) drawPxLine(px(refs.shoulderLine[0],w,h), px(refs.shoulderLine[1],w,h), color, 5);
+  if (refs.hipLine) drawPxLine(px(refs.hipLine[0],w,h), px(refs.hipLine[1],w,h), color, 5);
+  if (refs.limbPoints) {
+    for (const p of refs.limbPoints) if (p) drawDot(px(p,w,h), color, 7);
+  }
+}
 function draw(meas) {
   const w = canvas.width, h = canvas.height;
   ctx.clearRect(0,0,w,h);
@@ -654,12 +916,7 @@ function draw(meas) {
   } else {
     ctx.fillStyle = '#111827'; ctx.fillRect(0,0,w,h);
   }
-  // Crosshair / neutral helper
-  const guideOk = meas?.ok ? meas.neutralOk.ok : false;
-  ctx.lineWidth = 4;
-  ctx.strokeStyle = guideOk ? '#22c55e' : '#ef4444';
-  ctx.beginPath(); ctx.moveTo(w/2,0); ctx.lineTo(w/2,h); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0,h*0.75); ctx.lineTo(w,h*0.75); ctx.stroke();
+  drawNeutralHelpers(meas, w, h);
   if (meas?.ok) {
     ctx.strokeStyle = '#3b82f6'; ctx.lineWidth = 6;
     for (const ln of meas.lines) {
@@ -670,16 +927,25 @@ function draw(meas) {
     }
   }
   // Text overlay
-  ctx.font = 'bold 28px system-ui, sans-serif';
-  ctx.fillStyle = 'rgba(255,255,255,0.85)'; ctx.fillRect(14,14, Math.min(w-28, 760), 122);
+  ctx.font = 'bold 26px system-ui, sans-serif';
+  ctx.fillStyle = 'rgba(255,255,255,0.88)'; ctx.fillRect(14,14, Math.min(w-28, 820), 154);
   ctx.fillStyle = '#111827';
   const title = selectedMotion ? selectedMotion.label : '측정 항목';
-  ctx.fillText(title, 30, 50);
+  ctx.fillText(title, 30, 48);
+  const guideOk = meas?.ok ? meas.neutralOk.ok : false;
   ctx.fillStyle = guideOk ? '#16a34a' : '#dc2626';
-  ctx.fillText(meas?.ok ? (meas.neutralOk.msg || '') : '카메라/landmark 대기 중', 30, 90);
+  ctx.fillText(meas?.ok ? (meas.neutralOk.msg || '') : '카메라/landmark 대기 중', 30, 84);
   ctx.fillStyle = '#111827';
-  const romText = meas?.ok ? `ROM ${fmt(Math.max(0, meas.selectedRom))}°   Peak ${peak ? fmt(peak) : '--'}°   Rep ${reps.length}/${UI.repCount.value}` : 'START 후 중립자세를 맞추세요';
-  ctx.fillText(romText, 30, 126);
+  const romText = meas?.ok ? `선택방향 ROM ${fmt(Math.max(0, meas.selectedRom))}°   Peak ${peak ? fmt(peak) : '--'}°   Rep ${reps.length}/${UI.repCount.value}` : 'START 후 준비자세를 맞추세요';
+  ctx.fillText(romText, 30, 120);
+  let phaseText = '준비';
+  if (state === 'wait_neutral' || state === 'wait_next_neutral' || state === 'invalid_wait_neutral') phaseText = '기준선이 초록색으로 안정될 때까지 아직 움직이지 마세요';
+  else if (state === 'ready_to_move') phaseText = '선택 방향으로 끝범위까지 움직인 뒤 잠시 멈추세요';
+  else if (state === 'moving') phaseText = returnCueSpoken ? '처음 위치로 천천히 돌아오세요' : '끝범위에서 잠시 멈추세요';
+  else if (state === 'complete') phaseText = '측정 완료: 결과를 확인하세요';
+  else if (state === 'paused') phaseText = '측정 중단됨';
+  ctx.fillStyle = '#2563eb';
+  ctx.fillText(phaseText, 30, 154);
 }
 
 async function initModel() {
@@ -713,9 +979,50 @@ async function startCamera() {
   const vw = video.videoWidth || 960, vh = video.videoHeight || 720;
   canvas.width = vw; canvas.height = vh;
 }
+
+function updateButtons() {
+  const active = running && !!stream;
+  UI.startBtn.disabled = active;
+  UI.stopBtn.disabled = !active;
+  UI.measureBtn.disabled = !active;
+  UI.pauseBtn.disabled = !active || measurementPaused || state === 'complete';
+  UI.resumeBtn.disabled = !active || !measurementPaused;
+  UI.mainStopBtn.disabled = UI.stopBtn.disabled;
+  UI.mainMeasureBtn.disabled = UI.measureBtn.disabled;
+  UI.mainPauseBtn.disabled = UI.pauseBtn.disabled;
+  UI.mainResumeBtn.disabled = UI.resumeBtn.disabled;
+}
+function pauseMeasurement() {
+  if (!running) return;
+  measurementPaused = true;
+  state = 'paused';
+  stableStart = null;
+  peak = 0;
+  setGuide('측정이 중단되었습니다. 카메라는 유지됩니다. 다시 시작하려면 측정 재개 또는 측정 새로 시작을 누르세요.', 'warn');
+  setStateLabel('중단');
+  cancelSpeech();
+  speak('측정이 중단되었습니다.', 'paused');
+  updateButtons();
+}
+function resumeMeasurement() {
+  if (!running) return;
+  resetMeasurement(true);
+  setGuide('측정을 다시 시작합니다. 중립자세를 맞춰 주세요.', 'info');
+  speak('측정을 다시 시작합니다. 중립자세를 맞춰 주세요.', 'resume');
+  updateButtons();
+}
+function restartMeasurement() {
+  if (!running) {
+    setGuide('먼저 카메라와 모델을 시작하세요.', 'warn');
+    return;
+  }
+  resetMeasurement(true);
+  updateButtons();
+}
 async function startAll() {
   try {
     updateMotionOptions();
+    if (UI.voiceOn.checked && !voiceUnlocked) unlockVoice('음성 안내가 활성화되었습니다. 측정을 시작합니다.');
     if (selectedMotion?.unsupported) {
       setGuide(selectedMotion.note || '현재 지원하지 않는 항목입니다.', 'warn');
       return;
@@ -724,7 +1031,8 @@ async function startAll() {
     await initModel();
     await startCamera();
     running = true;
-    UI.stopBtn.disabled = false; UI.measureBtn.disabled = false;
+    measurementPaused = false;
+    updateButtons();
     resetMeasurement(UI.autoStart.checked);
     requestAnimationFrame(loop);
   } catch (e) {
@@ -735,8 +1043,10 @@ async function startAll() {
 }
 function stopAll() {
   running = false;
+  measurementPaused = false;
+  cancelSpeech();
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
-  UI.startBtn.disabled = false; UI.stopBtn.disabled = true; UI.measureBtn.disabled = true;
+  updateButtons();
   setGuide('카메라가 정지되었습니다.', 'info');
   setStateLabel('정지');
 }
@@ -786,11 +1096,20 @@ function download(filename, text, mime) {
 UI.downloadTxt.addEventListener('click', () => download('rom_result.txt', makeTxt(), 'text/plain;charset=utf-8'));
 UI.downloadJson.addEventListener('click', () => download('rom_result.json', JSON.stringify(resultData, null, 2), 'application/json;charset=utf-8'));
 UI.startBtn.addEventListener('click', startAll);
-UI.measureBtn.addEventListener('click', () => resetMeasurement(true));
+UI.voiceBtn.addEventListener('click', () => unlockVoice());
+UI.measureBtn.addEventListener('click', restartMeasurement);
+UI.pauseBtn.addEventListener('click', pauseMeasurement);
+UI.resumeBtn.addEventListener('click', resumeMeasurement);
 UI.stopBtn.addEventListener('click', stopAll);
+UI.mainVoiceBtn.addEventListener('click', () => unlockVoice());
+UI.mainMeasureBtn.addEventListener('click', restartMeasurement);
+UI.mainPauseBtn.addEventListener('click', pauseMeasurement);
+UI.mainResumeBtn.addEventListener('click', resumeMeasurement);
+UI.mainStopBtn.addEventListener('click', stopAll);
 
 populateControls();
 resetMeasurement(false);
+updateButtons();
 // Initial placeholder drawing
 ctx.fillStyle = '#111827'; ctx.fillRect(0,0,canvas.width,canvas.height);
 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 34px system-ui, sans-serif';
@@ -800,4 +1119,4 @@ ctx.fillText('카메라/모델 시작을 누르세요', 40, 80);
 </html>
 '''
 
-components.html(HTML, height=1120, scrolling=True)
+components.html(HTML, height=1240, scrolling=True)
