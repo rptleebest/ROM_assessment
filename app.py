@@ -423,6 +423,8 @@ function chooseKoreanVoice() {
   const ko = voices.find(v => (v.lang || '').toLowerCase().startsWith('ko'));
   return ko || voices[0] || null;
 }
+
+// === 수정된 핵심 함수 (크롬 음성 엔진 버그 대비) ===
 function unlockVoice(message='음성 안내가 활성화되었습니다.') {
   if (!UI.voiceOn.checked) {
     UI.voiceStatus.textContent = '음성 안내가 꺼져 있습니다. 체크박스를 켜면 음성 안내를 사용할 수 있습니다.';
@@ -435,16 +437,45 @@ function unlockVoice(message='음성 안내가 활성화되었습니다.') {
   try {
     preferredVoice = chooseKoreanVoice();
     window.speechSynthesis.cancel();
+    
+    // 버튼을 누르자마자 UI 피드백을 주어 앱이 멈추지 않았음을 사용자에게 알립니다.
+    UI.voiceStatus.textContent = '음성 활성화를 시도하고 있습니다...';
+    
     const u = new SpeechSynthesisUtterance(message);
     u.lang = preferredVoice?.lang || 'ko-KR';
     if (preferredVoice) u.voice = preferredVoice;
     u.rate = 1.0;
     u.pitch = 1.0;
-    u.onstart = () => { voiceUnlocked = true; UI.voiceStatus.textContent = '음성 안내가 활성화되었습니다.'; };
-    u.onend = () => { voiceUnlocked = true; speaking = false; setTimeout(processSpeechQueue, 120); };
-    u.onerror = () => { UI.voiceStatus.textContent = '음성 출력이 차단되었습니다. 스마트폰에서는 이 버튼을 한 번 더 누르거나 브라우저 음량/무음모드를 확인하세요.'; speaking = false; };
+    
+    // 크롬 음성 엔진(Hanging Bug) 대비용 타이머 설정 (1.5초 이내에 onstart가 안 오면 에러 처리)
+    const fallbackTimer = setTimeout(() => {
+      if (!voiceUnlocked) {
+        UI.voiceStatus.textContent = '크롬 브라우저의 음성 엔진이 응답하지 않습니다. 백그라운드에서 크롬 앱을 완전히 종료 후 다시 접속해 주세요.';
+        speaking = false;
+      }
+    }, 1500);
+
+    u.onstart = () => { 
+      clearTimeout(fallbackTimer);
+      voiceUnlocked = true; 
+      UI.voiceStatus.textContent = '음성 안내가 활성화되었습니다.'; 
+    };
+    
+    u.onend = () => { 
+      voiceUnlocked = true; 
+      speaking = false; 
+      setTimeout(processSpeechQueue, 120); 
+    };
+    
+    u.onerror = () => { 
+      clearTimeout(fallbackTimer);
+      UI.voiceStatus.textContent = '음성 출력이 차단되었습니다. 기기의 미디어 볼륨이나 무음모드를 확인하세요.'; 
+      speaking = false; 
+    };
+    
     speaking = true;
     window.speechSynthesis.speak(u);
+    
     setTimeout(() => {
       if (window.speechSynthesis.paused) window.speechSynthesis.resume();
     }, 250);
@@ -452,6 +483,8 @@ function unlockVoice(message='음성 안내가 활성화되었습니다.') {
     UI.voiceStatus.textContent = '음성 활성화 실패: ' + e.message;
   }
 }
+// =================================================
+
 function cancelSpeech() {
   speechQueue = [];
   speaking = false;
@@ -663,24 +696,17 @@ function neutralGuideOk(lms, motion) {
   function nearCross(p, mul=1.0) { return nearVertical(p, mul) && nearHorizontal(p, mul); }
   function level(a, b, limit=0.06) { return (!a || !b) ? true : Math.abs(a.y - b.y) <= limit; }
 
-  // 정면 촬영: 고정 수직선은 코/어깨 중심 또는 어깨/골반 중심 정렬, 고정 수평선은 주 기준 마커 위치를 맞추는 기준입니다.
   if (motion.plane === 'front') {
     if (motion.calc === 'neckLateral' || motion.calc === 'neckRotationProxy') {
-      refs.anchor = nose;
-      refs.base = shoulderMid;
-      refs.target = nose;
-      refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
+      refs.anchor = nose; refs.base = shoulderMid; refs.target = nose; refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
       if (!nose || !shoulderMid) return {ok:false, msg:'코와 양쪽 어깨가 보이도록 정면으로 맞추세요', refs};
       const ok = nearCross(nose, 1.15) && nearVertical(shoulderMid, 1.15) && level(ls, rs, 0.055);
       const msg = ok ? '고정 기준축 OK' : '코를 중앙 십자선에, 어깨 중심을 수직선에 맞추고 양쪽 어깨를 수평으로 유지하세요';
       return {ok, msg, refs};
     }
     if (motion.calc === 'trunk') {
-      refs.anchor = shoulderMid;
-      refs.base = hipMid;
-      refs.target = shoulderMid;
-      refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
-      refs.hipLine = (lh && rh) ? [lh, rh] : null;
+      refs.anchor = shoulderMid; refs.base = hipMid; refs.target = shoulderMid;
+      refs.shoulderLine = (ls && rs) ? [ls, rs] : null; refs.hipLine = (lh && rh) ? [lh, rh] : null;
       if (!shoulderMid || !hipMid) return {ok:false, msg:'어깨와 골반이 모두 보이도록 정면으로 맞추세요', refs};
       const ok = nearCross(shoulderMid, 1.2) && nearVertical(hipMid, 1.2) && level(ls, rs, 0.06) && level(lh, rh, 0.07);
       const msg = ok ? '고정 기준축 OK' : '어깨 중심을 중앙 십자선에, 골반 중심을 수직선에 맞추고 어깨/골반을 수평으로 유지하세요';
@@ -689,35 +715,25 @@ function neutralGuideOk(lms, motion) {
     if (motion.calc === 'three') {
       const ids = motion.parts.map(p => partIdx(motion.side, p));
       const pts = ids.map(id => getPt(lms, id));
-      refs.limbPoints = pts;
-      refs.anchor = pts[1] || null;
-      refs.base = pts[1] || null;
-      refs.target = pts[0] || null;
+      refs.limbPoints = pts; refs.anchor = pts[1] || null; refs.base = pts[1] || null; refs.target = pts[0] || null;
       const ok = !pts.some(p => !p) && nearCross(pts[1], 1.25);
       const msg = ok ? '고정 기준축 OK' : '측정 중심 관절을 중앙 십자선 주변에 맞추고 3개 관절점이 모두 보이게 하세요';
       return {ok, msg, refs};
     }
   }
 
-  // 측면 촬영: 머리/어깨 또는 몸통 기준점이 화면 중앙 고정축 부근에 있어야 합니다.
   if (motion.plane === 'side') {
     if (motion.calc === 'neckFlexExt') {
       const head = mid(le, re) || nose;
-      refs.anchor = head;
-      refs.base = shoulderMid;
-      refs.target = head;
-      refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
+      refs.anchor = head; refs.base = shoulderMid; refs.target = head; refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
       if (!head || !shoulderMid) return {ok:false, msg:'귀/코와 어깨가 보이도록 측면을 맞추세요', refs};
       const ok = nearCross(head, 1.2) && nearVertical(shoulderMid, 1.25);
       const msg = ok ? '고정 기준축 OK' : '귀/코를 중앙 십자선에, 어깨 중심을 수직선에 맞춰 주세요';
       return {ok, msg, refs};
     }
     if (motion.calc === 'trunk') {
-      refs.anchor = shoulderMid;
-      refs.base = hipMid;
-      refs.target = shoulderMid;
-      refs.shoulderLine = (ls && rs) ? [ls, rs] : null;
-      refs.hipLine = (lh && rh) ? [lh, rh] : null;
+      refs.anchor = shoulderMid; refs.base = hipMid; refs.target = shoulderMid;
+      refs.shoulderLine = (ls && rs) ? [ls, rs] : null; refs.hipLine = (lh && rh) ? [lh, rh] : null;
       if (!shoulderMid || !hipMid) return {ok:false, msg:'어깨와 골반이 모두 보이도록 측면을 맞추세요', refs};
       const ok = nearCross(shoulderMid, 1.2) && nearVertical(hipMid, 1.25);
       const msg = ok ? '고정 기준축 OK' : '어깨 중심을 중앙 십자선에, 골반 중심을 수직선에 맞춰 주세요';
@@ -726,24 +742,17 @@ function neutralGuideOk(lms, motion) {
     if (motion.calc === 'three') {
       const ids = motion.parts.map(p => partIdx(motion.side, p));
       const pts = ids.map(id => getPt(lms, id));
-      refs.limbPoints = pts;
-      refs.anchor = pts[1] || null;
-      refs.base = pts[1] || null;
-      refs.target = pts[0] || null;
+      refs.limbPoints = pts; refs.anchor = pts[1] || null; refs.base = pts[1] || null; refs.target = pts[0] || null;
       const ok = !pts.some(p => !p) && nearCross(pts[1], 1.25);
       const msg = ok ? '고정 기준축 OK' : '측정 중심 관절을 중앙 십자선 주변에 맞추고 3개 관절점이 모두 보이게 하세요';
       return {ok, msg, refs};
     }
   }
 
-  // 그 밖의 항목은 중심 관절을 고정 축 주변에 위치시키는 것을 기준으로 합니다.
   if (motion.calc === 'three') {
     const ids = motion.parts.map(p => partIdx(motion.side, p));
     const pts = ids.map(id => getPt(lms, id));
-    refs.limbPoints = pts;
-    refs.anchor = pts[1] || null;
-    refs.base = pts[1] || null;
-    refs.target = pts[0] || null;
+    refs.limbPoints = pts; refs.anchor = pts[1] || null; refs.base = pts[1] || null; refs.target = pts[0] || null;
     const ok = !pts.some(p => !p) && nearCross(pts[1], 1.35);
     return {ok, msg: ok ? '고정 기준축 OK' : '측정 중심 관절을 중앙 십자선 주변에 맞추고 3개 관절점이 모두 보이게 하세요', refs};
   }
@@ -997,7 +1006,6 @@ function drawNeutralHelpers(meas, w, h) {
   const tolX = w * tolRatio;
   const tolY = h * tolRatio;
 
-  // Fixed screen axes and tolerance bands.
   ctx.save();
   ctx.fillStyle = ok ? 'rgba(34,197,94,0.10)' : 'rgba(239,68,68,0.10)';
   ctx.fillRect(cx - tolX, 0, tolX * 2, h);
@@ -1018,7 +1026,6 @@ function drawNeutralHelpers(meas, w, h) {
   const target = refs.target ? px(refs.target,w,h) : null;
   const anchor = refs.anchor ? px(refs.anchor,w,h) : target;
 
-  // Target/anchor alignment to fixed axis.
   if (anchor) {
     drawPxLine({x:anchor.x, y:anchor.y}, {x:cx, y:anchor.y}, color, 3, [6,6]);
     drawPxLine({x:anchor.x, y:anchor.y}, {x:anchor.x, y:cy}, color, 3, [6,6]);
@@ -1058,7 +1065,6 @@ function draw(meas) {
       ctx.fillStyle = '#86efac'; ctx.beginPath(); ctx.arc(p.x*w, p.y*h, 8, 0, Math.PI*2); ctx.fill();
     }
   }
-  // Text overlay
   ctx.font = 'bold 26px system-ui, sans-serif';
   ctx.fillStyle = 'rgba(255,255,255,0.88)'; ctx.fillRect(14,14, Math.min(w-28, 820), 154);
   ctx.fillStyle = '#111827';
@@ -1242,7 +1248,6 @@ UI.mainStopBtn.addEventListener('click', stopAll);
 populateControls();
 resetMeasurement(false);
 updateButtons();
-// Initial placeholder drawing
 ctx.fillStyle = '#111827'; ctx.fillRect(0,0,canvas.width,canvas.height);
 ctx.fillStyle = '#ffffff'; ctx.font = 'bold 34px system-ui, sans-serif';
 ctx.fillText('카메라/모델 시작을 누르세요', 40, 80);
