@@ -29,7 +29,7 @@ jobs:
           import time
           from playwright.sync_api import sync_playwright
 
-          URL = 'https://ROM_assessment.streamlit.app'
+          URL = 'https://rom-test.streamlit.app'
 
           with sync_playwright() as p:
               browser = p.chromium.launch(headless=True)
